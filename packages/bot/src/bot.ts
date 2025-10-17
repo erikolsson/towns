@@ -27,6 +27,7 @@ import {
     makeUniqueMediaStreamId,
     streamIdAsBytes,
     addressFromUserId,
+    make_ChannelMessage_Post_Content_GM,
 } from '@towns-protocol/sdk'
 import { type Context, type Env, type Next } from 'hono'
 import { createMiddleware } from 'hono/factory'
@@ -55,6 +56,7 @@ import {
     ChannelMessage_Post_Content_Image_InfoSchema,
     ChunkedMediaSchema,
     CreationCookieSchema,
+    type StreamEvent,
 } from '@towns-protocol/proto'
 import {
     bin_fromBase64,
@@ -715,6 +717,25 @@ export class Bot<
     }
 
     /**
+     * Send a GM (General Message) to a stream
+     * @param streamId - Id of the stream. Usually channelId or userId
+     * @param typeUrl - The type identifier for the GM message
+     * @param value - Optional binary payload for the GM message
+     * @param opts - Optional message options (threadId, replyId, ephemeral)
+     */
+    async sendGm(streamId: string, typeUrl: string, value?: Uint8Array, opts?: MessageOpts) {
+        const result = await this.client.sendGm(
+            streamId,
+            typeUrl,
+            value,
+            opts,
+            this.currentMessageTags,
+        )
+        this.currentMessageTags = undefined
+        return result
+    }
+
+    /**
      * Send a reaction to a stream
      * @param streamId - Id of the stream. Usually channelId or userId
      * @param refEventId - The eventId of the event to react to
@@ -749,6 +770,25 @@ export class Bot<
      */
     async adminRemoveEvent(streamId: string, refEventId: string) {
         const result = await this.client.adminRemoveEvent(streamId, refEventId)
+        return result
+    }
+
+    /**
+     * Send a raw event to a stream
+     * @param streamId - Id of the stream. Usually channelId or userId
+     * @param eventPayload - The event payload to send
+     * @param tags - Optional tags for the event
+     * @param ephemeral - Whether the event is ephemeral
+     */
+    async sendEvent(
+        streamId: string,
+        eventPayload: PlainMessage<StreamEvent>['payload'],
+        tags?: PlainMessage<Tags>,
+        ephemeral?: boolean,
+    ) {
+        const mergedTags = tags || this.currentMessageTags
+        const result = await this.client.sendEvent(streamId, eventPayload, mergedTags, ephemeral)
+        this.currentMessageTags = undefined
         return result
     }
 
@@ -1193,6 +1233,26 @@ const buildBotActions = (client: ClientV2, viemClient: ViemClient, spaceDapp: Sp
         return sendMessageEvent({ streamId, payload, tags, ephemeral: opts?.ephemeral })
     }
 
+    const sendGm = async (
+        streamId: string,
+        typeUrl: string,
+        value?: Uint8Array,
+        opts?: MessageOpts,
+        tags?: PlainMessage<Tags>,
+    ) => {
+        const payload = make_ChannelMessage_Post_Content_GM(typeUrl, value)
+
+        // Add threadId and replyId if provided
+        if (payload.payload.case === 'post' && payload.payload.value) {
+            payload.payload.value.threadId = opts?.threadId
+            payload.payload.value.replyId = opts?.replyId
+            payload.payload.value.replyPreview = opts?.replyId ? '🙈' : undefined
+            payload.payload.value.threadPreview = opts?.threadId ? '🙉' : undefined
+        }
+
+        return sendMessageEvent({ streamId, payload, tags, ephemeral: opts?.ephemeral })
+    }
+
     const editMessage = async (
         streamId: string,
         messageId: string,
@@ -1361,6 +1421,7 @@ const buildBotActions = (client: ClientV2, viemClient: ViemClient, spaceDapp: Sp
             parameters: ReadContractParameters<abi, functionName, args>,
         ) => readContract(viemClient, parameters),
         sendMessage,
+        sendGm,
         editMessage,
         sendReaction,
         removeEvent,
